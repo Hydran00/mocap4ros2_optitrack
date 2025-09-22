@@ -62,12 +62,12 @@ def generate_launch_description():
     )
 
     # Make the driver node take the 'activate' transition
-    # driver_activate_trans_event = EmitEvent(
-    #    event = ChangeState(
-    #        lifecycle_node_matcher = launch.events.matchers.matches_action(driver_node),
-    #        transition_id = lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
-    #     )
-    # )
+    driver_activate_trans_event = EmitEvent(
+       event = ChangeState(
+           lifecycle_node_matcher = launch.events.matchers.matches_action(driver_node),
+           transition_id = lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+        )
+    )
 
     # Create the launch description and populate
     ld = LaunchDescription()
