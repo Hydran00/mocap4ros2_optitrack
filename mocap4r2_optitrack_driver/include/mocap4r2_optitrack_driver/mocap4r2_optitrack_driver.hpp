@@ -41,10 +41,12 @@
 #ifndef MOCAP4R2_OPTITRACK_DRIVER__MOCAP4R2_OPTITRACK_DRIVER_HPP_
 #define MOCAP4R2_OPTITRACK_DRIVER__MOCAP4R2_OPTITRACK_DRIVER_HPP_
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -135,6 +137,14 @@ protected:
     mocap4r2_rigid_body_pub_;
   rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::Skeletons>::SharedPtr
     mocap4r2_skeleton_pub_;
+
+  std::map<std::string, rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::Markers>::SharedPtr>
+    markerset_pubs_;
+  mutable std::mutex markerset_pubs_mutex_;
+
+  std::map<std::string, std::vector<std::string>> markerset_marker_names_;
+
+  void build_markerset_name_map();
 
   // --- Connection parameters ---
   std::string connection_type_;

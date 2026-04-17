@@ -18,7 +18,9 @@
 // Author: David Vargas Frutos <david.vargas@urjc.es>
 // Author: Francisco Martín <fmrico@urjc.es>
 
+#include <algorithm>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -154,6 +156,15 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
         marker2rb[modelID].push_back(marker);
       }
     }
+    for (int i = 0; i < data->nOtherMarkers; i++) {
+      mocap4r2_msgs::msg::Marker marker;
+      marker.id_type = mocap4r2_msgs::msg::Marker::USE_INDEX;
+      marker.marker_index = data->nLabeledMarkers + i;
+      marker.translation.x = data->OtherMarkers[i][0];
+      marker.translation.y = data->OtherMarkers[i][1];
+      marker.translation.z = data->OtherMarkers[i][2];
+      msg.markers.push_back(marker);
+    }
     mocap4r2_markers_pub_->publish(msg);
   }
 
@@ -161,7 +172,7 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
   if (mocap4r2_rigid_body_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::RigidBodies msg_rb;
     msg_rb.header.stamp = now() - frame_delay;
-    msg_rb.header.frame_id = "map";
+    msg_rb.header.frame_id = "mocap";
     msg_rb.frame_number = frame_number_;
 
     for (int i = 0; i < data->nRigidBodies; i++) {
@@ -184,7 +195,7 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
   if (mocap4r2_skeleton_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::Skeletons msg_sk;
     msg_sk.header.stamp = now() - frame_delay;
-    msg_sk.header.frame_id = "map";
+    msg_sk.header.frame_id = "mocap";
     msg_sk.frame_number = frame_number_;
 
     for (int i = 0; i < data->nSkeletons; i++) {
@@ -209,6 +220,51 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
       msg_sk.skeletons.push_back(sk_msg);
     }
     mocap4r2_skeleton_pub_->publish(msg_sk);
+  }
+
+  // --- MarkerSets ---
+  {
+    std::lock_guard<std::mutex> lock(markerset_pubs_mutex_);
+    for (int i = 0; i < data->nMarkerSets; i++) {
+      sMarkerSetData & ms_data = data->MocapData[i];
+      std::string set_name(ms_data.szName);
+
+      if (markerset_pubs_.find(set_name) == markerset_pubs_.end()) {
+        std::string topic_name = set_name;
+        std::replace(topic_name.begin(), topic_name.end(), ' ', '_');
+        auto pub = create_publisher<mocap4r2_msgs::msg::Markers>(
+          "markersets/" + topic_name, rclcpp::QoS(1000));
+        pub->on_activate();
+        markerset_pubs_[set_name] = pub;
+        RCLCPP_INFO(get_logger(), "Created markerset publisher: markersets/%s", topic_name.c_str());
+      }
+
+      auto & pub = markerset_pubs_[set_name];
+      if (pub->get_subscription_count() > 0) {
+        mocap4r2_msgs::msg::Markers msg;
+        msg.header.stamp = now() - frame_delay;
+        msg.header.frame_id = "map";
+        msg.frame_number = frame_number_;
+
+        const auto & name_map = markerset_marker_names_;
+        auto it = name_map.find(set_name);
+        for (int j = 0; j < ms_data.nMarkers; j++) {
+          mocap4r2_msgs::msg::Marker marker;
+          if (it != name_map.end() && j < static_cast<int>(it->second.size())) {
+            marker.id_type = mocap4r2_msgs::msg::Marker::USE_BOTH;
+            marker.marker_name = it->second[j];
+          } else {
+            marker.id_type = mocap4r2_msgs::msg::Marker::USE_INDEX;
+          }
+          marker.marker_index = j;
+          marker.translation.x = ms_data.Markers[j][0];
+          marker.translation.y = ms_data.Markers[j][1];
+          marker.translation.z = ms_data.Markers[j][2];
+          msg.markers.push_back(marker);
+        }
+        pub->publish(msg);
+      }
+    }
   }
 }
 
@@ -242,6 +298,12 @@ OptitrackDriverNode::on_activate(const rclcpp_lifecycle::State &state) {
   mocap4r2_markers_pub_->on_activate();
   mocap4r2_rigid_body_pub_->on_activate();
   mocap4r2_skeleton_pub_->on_activate();
+  {
+    std::lock_guard<std::mutex> lock(markerset_pubs_mutex_);
+    for (auto & [name, pub] : markerset_pubs_) {
+      pub->on_activate();
+    }
+  }
   RCLCPP_INFO(get_logger(), "Activated!\n");
 
   return ControlledLifecycleNode::on_activate(state);
@@ -253,6 +315,12 @@ OptitrackDriverNode::on_deactivate(const rclcpp_lifecycle::State &state) {
   mocap4r2_markers_pub_->on_deactivate();
   mocap4r2_rigid_body_pub_->on_deactivate();
   mocap4r2_skeleton_pub_->on_deactivate();
+  {
+    std::lock_guard<std::mutex> lock(markerset_pubs_mutex_);
+    for (auto & [name, pub] : markerset_pubs_) {
+      pub->on_deactivate();
+    }
+  }
   RCLCPP_INFO(get_logger(), "Deactivated!\n");
 
   return ControlledLifecycleNode::on_deactivate(state);
@@ -319,6 +387,8 @@ bool OptitrackDriverNode::connect_optitrack() {
         !data_descriptions) {
       RCLCPP_DEBUG(get_logger(),
                    "[Client] Unable to retrieve Data Descriptions.\n");
+    } else {
+      build_markerset_name_map();
     }
 
     RCLCPP_INFO(get_logger(), "\n[Client] Server application info:\n");
@@ -367,6 +437,24 @@ bool OptitrackDriverNode::disconnect_optitrack() {
   } else {
     RCLCPP_ERROR(get_logger(), "[Client] Disconnect not successful..");
     return false;
+  }
+}
+
+void OptitrackDriverNode::build_markerset_name_map() {
+  markerset_marker_names_.clear();
+  for (int i = 0; i < data_descriptions->nDataDescriptions; i++) {
+    auto & desc = data_descriptions->arrDataDescriptions[i];
+    if (desc.type != Descriptor_MarkerSet) {
+      continue;
+    }
+    auto * ms = desc.Data.MarkerSetDescription;
+    std::string set_name(ms->szName);
+    std::vector<std::string> names;
+    for (int j = 0; j < ms->nMarkers; j++) {
+      names.emplace_back(ms->szMarkerNames[j]);
+    }
+    markerset_marker_names_[set_name] = std::move(names);
+    RCLCPP_INFO(get_logger(), "Markerset '%s': %d named markers", set_name.c_str(), ms->nMarkers);
   }
 }
 

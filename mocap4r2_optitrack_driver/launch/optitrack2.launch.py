@@ -26,7 +26,7 @@ from launch import LaunchDescription
 from launch.actions import EmitEvent
 from launch.actions import SetEnvironmentVariable,DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import LifecycleNode
+from launch_ros.actions import LifecycleNode, Node
 from launch_ros.events.lifecycle import ChangeState
 
 import lifecycle_msgs.msg
@@ -69,12 +69,20 @@ def generate_launch_description():
         )
     )
 
+    # static_tf_map_to_world = Node(
+    #     package='tf2_ros',
+    #     executable='static_transform_publisher',
+    #     arguments=['0', '0', '0', '0', '0', '0', 'world', 'map'],
+    #     output='screen',
+    # )
+
     # Create the launch description and populate
     ld = LaunchDescription()
 
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(DeclareLaunchArgument('namespace', default_value=''))
     ld.add_action(DeclareLaunchArgument('config_file', default_value=params_file_path))
+    # ld.add_action(static_tf_map_to_world)
     ld.add_action(driver_node)
     ld.add_action(driver_configure_trans_event)
     # ld.add_action(driver_activate_trans_event)

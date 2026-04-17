@@ -19,14 +19,25 @@
 #include <memory>
 #include "mocap4r2_optitrack_driver/mocap4r2_optitrack_driver.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "lifecycle_msgs/msg/transition.hpp"
 
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
-  rclcpp::NodeOptions node_options;
   auto node = std::make_shared<mocap4r2_optitrack_driver::OptitrackDriverNode>();
-  rclcpp::spin(node->get_node_base_interface());
-  rclcpp::shutdown();
 
+  auto executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+  executor->add_node(node->get_node_base_interface());
+
+  rclcpp::TimerBase::SharedPtr timer;
+  timer = node->create_wall_timer(
+    std::chrono::seconds(1),
+    [&node, &timer]() {
+      timer->cancel();
+      node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE);
+    });
+
+  executor->spin();
+  rclcpp::shutdown();
   return 0;
 }
