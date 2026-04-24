@@ -71,7 +71,6 @@ void OptitrackDriverNode::set_settings_optitrack() {
 
 bool OptitrackDriverNode::stop_optitrack() {
   RCLCPP_INFO(get_logger(), "Disconnecting from optitrack DataStream SDK");
-
   return true;
 }
 
@@ -130,7 +129,7 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
 
   std::map<int, std::vector<mocap4r2_msgs::msg::Marker>> marker2rb;
 
-  // --- Markers (unchanged) ---
+  // --- Markers ---
   if (mocap4r2_markers_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::Markers msg;
     msg.header.stamp = now() - frame_delay;
@@ -168,7 +167,7 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
     mocap4r2_markers_pub_->publish(msg);
   }
 
-  // --- Rigid Bodies (unchanged) ---
+  // --- Rigid Bodies ---
   if (mocap4r2_rigid_body_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::RigidBodies msg_rb;
     msg_rb.header.stamp = now() - frame_delay;
@@ -191,7 +190,7 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
     mocap4r2_rigid_body_pub_->publish(msg_rb);
   }
 
-  // --- Skeletons (new) ---
+  // --- Skeletons ---
   if (mocap4r2_skeleton_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::Skeletons msg_sk;
     msg_sk.header.stamp = now() - frame_delay;
@@ -206,7 +205,26 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
       for (int j = 0; j < sk_data.nRigidBodies; j++) {
         sRigidBodyData &rb_data = sk_data.RigidBodyData[j];
         mocap4r2_msgs::msg::RigidBody rb;
-        rb.rigid_body_name = std::to_string(rb_data.ID);
+
+        // Look up the human-readable bone name from descriptions.
+        // The raw rb_data.ID encodes both skeleton ID (high bits) and bone ID
+        // (low bits); we use it as-is as the map key since build_markerset_name_map()
+        // stores descriptions with the same raw ID.
+        auto it = skeleton_bone_names_.find(rb_data.ID);
+        if (it != skeleton_bone_names_.end()) {
+          rb.rigid_body_name = it->second;
+        } else {
+          // Fallback: decode and use bone index as string
+          int skeletonID, boneID;
+          NatNet_DecodeID(rb_data.ID, &skeletonID, &boneID);
+          rb.rigid_body_name = "bone_" + std::to_string(boneID);
+          RCLCPP_WARN_ONCE(get_logger(),
+                           "Bone ID %d (skeleton %d, bone %d) not found in "
+                           "descriptions, using fallback name '%s'",
+                           rb_data.ID, skeletonID, boneID,
+                           rb.rigid_body_name.c_str());
+        }
+
         rb.pose.position.x = rb_data.x;
         rb.pose.position.y = rb_data.y;
         rb.pose.position.z = rb_data.z;
@@ -214,7 +232,6 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
         rb.pose.orientation.y = rb_data.qy;
         rb.pose.orientation.z = rb_data.qz;
         rb.pose.orientation.w = rb_data.qw;
-        // markers not directly included in skeleton RB stream
         sk_msg.rigid_bodies.push_back(rb);
       }
       msg_sk.skeletons.push_back(sk_msg);
@@ -226,31 +243,33 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
   {
     std::lock_guard<std::mutex> lock(markerset_pubs_mutex_);
     for (int i = 0; i < data->nMarkerSets; i++) {
-      sMarkerSetData & ms_data = data->MocapData[i];
+      sMarkerSetData &ms_data = data->MocapData[i];
       std::string set_name(ms_data.szName);
 
       if (markerset_pubs_.find(set_name) == markerset_pubs_.end()) {
         std::string topic_name = set_name;
         std::replace(topic_name.begin(), topic_name.end(), ' ', '_');
         auto pub = create_publisher<mocap4r2_msgs::msg::Markers>(
-          "markersets/" + topic_name, rclcpp::QoS(1000));
+            "markersets/" + topic_name, rclcpp::QoS(1000));
         pub->on_activate();
         markerset_pubs_[set_name] = pub;
-        RCLCPP_INFO(get_logger(), "Created markerset publisher: markersets/%s", topic_name.c_str());
+        RCLCPP_INFO(get_logger(), "Created markerset publisher: markersets/%s",
+                    topic_name.c_str());
       }
 
-      auto & pub = markerset_pubs_[set_name];
+      auto &pub = markerset_pubs_[set_name];
       if (pub->get_subscription_count() > 0) {
         mocap4r2_msgs::msg::Markers msg;
         msg.header.stamp = now() - frame_delay;
         msg.header.frame_id = "map";
         msg.frame_number = frame_number_;
 
-        const auto & name_map = markerset_marker_names_;
+        const auto &name_map = markerset_marker_names_;
         auto it = name_map.find(set_name);
         for (int j = 0; j < ms_data.nMarkers; j++) {
           mocap4r2_msgs::msg::Marker marker;
-          if (it != name_map.end() && j < static_cast<int>(it->second.size())) {
+          if (it != name_map.end() &&
+              j < static_cast<int>(it->second.size())) {
             marker.id_type = mocap4r2_msgs::msg::Marker::USE_BOTH;
             marker.marker_name = it->second[j];
           } else {
@@ -271,8 +290,6 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
 using CallbackReturnT =
     rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
 
-// The next Callbacks are used to manage behavior in the different states of the
-// lifecycle node.
 CallbackReturnT
 OptitrackDriverNode::on_configure(const rclcpp_lifecycle::State &state) {
   (void)state;
@@ -300,7 +317,7 @@ OptitrackDriverNode::on_activate(const rclcpp_lifecycle::State &state) {
   mocap4r2_skeleton_pub_->on_activate();
   {
     std::lock_guard<std::mutex> lock(markerset_pubs_mutex_);
-    for (auto & [name, pub] : markerset_pubs_) {
+    for (auto &[name, pub] : markerset_pubs_) {
       pub->on_activate();
     }
   }
@@ -317,7 +334,7 @@ OptitrackDriverNode::on_deactivate(const rclcpp_lifecycle::State &state) {
   mocap4r2_skeleton_pub_->on_deactivate();
   {
     std::lock_guard<std::mutex> lock(markerset_pubs_mutex_);
-    for (auto & [name, pub] : markerset_pubs_) {
+    for (auto &[name, pub] : markerset_pubs_) {
       pub->on_deactivate();
     }
   }
@@ -442,19 +459,40 @@ bool OptitrackDriverNode::disconnect_optitrack() {
 
 void OptitrackDriverNode::build_markerset_name_map() {
   markerset_marker_names_.clear();
+  skeleton_bone_names_.clear();
+
   for (int i = 0; i < data_descriptions->nDataDescriptions; i++) {
-    auto & desc = data_descriptions->arrDataDescriptions[i];
-    if (desc.type != Descriptor_MarkerSet) {
-      continue;
+    auto &desc = data_descriptions->arrDataDescriptions[i];
+
+    // --- MarkerSet names ---
+    if (desc.type == Descriptor_MarkerSet) {
+      auto *ms = desc.Data.MarkerSetDescription;
+      std::string set_name(ms->szName);
+      std::vector<std::string> names;
+      for (int j = 0; j < ms->nMarkers; j++) {
+        names.emplace_back(ms->szMarkerNames[j]);
+      }
+      markerset_marker_names_[set_name] = std::move(names);
+      RCLCPP_INFO(get_logger(), "Markerset '%s': %d named markers",
+                  set_name.c_str(), ms->nMarkers);
     }
-    auto * ms = desc.Data.MarkerSetDescription;
-    std::string set_name(ms->szName);
-    std::vector<std::string> names;
-    for (int j = 0; j < ms->nMarkers; j++) {
-      names.emplace_back(ms->szMarkerNames[j]);
+
+    // --- Skeleton bone names ---
+    if (desc.type == Descriptor_Skeleton) {
+      auto *sk = desc.Data.SkeletonDescription;
+      RCLCPP_INFO(get_logger(), "Skeleton '%s' (ID %d): %d bones",
+                  sk->szName, sk->skeletonID, sk->nRigidBodies);
+
+      for (int j = 0; j < sk->nRigidBodies; j++) {
+        auto &rb_desc = sk->RigidBodies[j];
+        // rb_desc.ID here is the raw (encoded) ID — same value that will
+        // appear in sRigidBodyData::ID during streaming, so we use it
+        // directly as the map key for a straightforward lookup at runtime.
+        skeleton_bone_names_[rb_desc.ID] = std::string(rb_desc.szName);
+        RCLCPP_INFO(get_logger(), "  Bone raw ID %d -> '%s'",
+                    rb_desc.ID, rb_desc.szName);
+      }
     }
-    markerset_marker_names_[set_name] = std::move(names);
-    RCLCPP_INFO(get_logger(), "Markerset '%s': %d named markers", set_name.c_str(), ms->nMarkers);
   }
 }
 
