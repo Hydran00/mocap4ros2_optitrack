@@ -151,6 +151,8 @@ protected:
   std::string server_address_;
   std::string local_address_;
   std::string multicast_address_;
+  // mapping from model ID to bone names
+  std::map<int, std::string> skeleton_bone_names_; 
   uint16_t server_command_port_;
   uint16_t server_data_port_;
 

@@ -206,10 +206,6 @@ void OptitrackDriverNode::process_frame(sFrameOfMocapData *data) {
         sRigidBodyData &rb_data = sk_data.RigidBodyData[j];
         mocap4r2_msgs::msg::RigidBody rb;
 
-        // Look up the human-readable bone name from descriptions.
-        // The raw rb_data.ID encodes both skeleton ID (high bits) and bone ID
-        // (low bits); we use it as-is as the map key since build_markerset_name_map()
-        // stores descriptions with the same raw ID.
         auto it = skeleton_bone_names_.find(rb_data.ID);
         if (it != skeleton_bone_names_.end()) {
           rb.rigid_body_name = it->second;
@@ -485,12 +481,17 @@ void OptitrackDriverNode::build_markerset_name_map() {
 
       for (int j = 0; j < sk->nRigidBodies; j++) {
         auto &rb_desc = sk->RigidBodies[j];
-        // rb_desc.ID here is the raw (encoded) ID — same value that will
-        // appear in sRigidBodyData::ID during streaming, so we use it
-        // directly as the map key for a straightforward lookup at runtime.
-        skeleton_bone_names_[rb_desc.ID] = std::string(rb_desc.szName);
-        RCLCPP_INFO(get_logger(), "  Bone raw ID %d -> '%s'",
-                    rb_desc.ID, rb_desc.szName);
+        // Description stores bone-local ID; frame data encodes it as
+        // (skeletonID << 16) | boneID. Encode here to match frame data keys.
+        int encoded_id = (sk->skeletonID << 16) | rb_desc.ID;
+        std::string bone_name(rb_desc.szName);
+        const std::string prefix = "Skeleton_";
+        if (bone_name.rfind(prefix, 0) == 0) {
+          bone_name = bone_name.substr(prefix.size());
+        }
+        skeleton_bone_names_[encoded_id] = bone_name;
+        RCLCPP_INFO(get_logger(), "  Bone skeleton=%d local_id=%d encoded=%d -> '%s'",
+                    sk->skeletonID, rb_desc.ID, encoded_id, bone_name.c_str());
       }
     }
   }
