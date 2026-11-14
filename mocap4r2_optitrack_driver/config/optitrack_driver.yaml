@@ -1,0 +1,22 @@
+# OptiTrack (Motive) driver. Check the Data Streaming panel of Motive.
+optitrack_driver:
+  ros__parameters:
+    server_address: "192.168.1.10"   # Motive computer ("Local Interface" in Motive)
+    local_address: "0.0.0.0"         # this computer's interface towards Motive
+    connection_type: "auto"          # auto (as Motive says), multicast or unicast
+    multicast_address: ""            # empty: as Motive says (239.255.42.99)
+    server_command_port: 1510
+    server_data_port: 0              # 0: as Motive says (1511)
+    timeout: 2.0                     # seconds to wait for Motive answers
+    up_axis: "y"                     # "Up Axis" of Motive streaming: y (default) or z
+    skeleton_coordinates: "global"   # "Skeleton Coordinates" of Motive streaming
+    compensate_latency: true         # stamp = reception - Motive latency
+    frame_id: "mocap"
+    publish_markers: true
+    publish_rigid_bodies: true
+    publish_skeletons: true
+    publish_tf: false                # TF frame_id -> <tf_prefix><rigid body name>
+    tf_prefix: ""
+    qos:
+      reliability: "reliable"
+      depth: 10
