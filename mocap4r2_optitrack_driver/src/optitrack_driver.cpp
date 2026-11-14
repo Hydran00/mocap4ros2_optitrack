@@ -140,6 +140,9 @@ OptitrackDriver::on_system_configure()
 
   client_ = make_backend(kind, config);  // throws on invalid addresses or missing SDK
   server_ = client_->connect();          // throws if Motive does not answer
+  server_label_ = server_.app_name + " " + version_string(server_.app_version) + " at " +
+    config.server_address + " (NatNet " + version_string(server_.natnet_version) + ", " +
+    (client_->multicast() ? "multicast" : "unicast") + ", " + client_->name() + " backend)";
   RCLCPP_INFO(
     get_logger(), "connected to %s %s (NatNet %s, %s, %s backend)", server_.app_name.c_str(),
     version_string(server_.app_version).c_str(), version_string(server_.natnet_version).c_str(),
@@ -183,6 +186,7 @@ OptitrackDriver::CallbackReturn
 OptitrackDriver::on_system_cleanup()
 {
   release_client();  // stops the threads and disconnects
+  server_label_.clear();
   publisher_.reset();
   return CallbackReturn::SUCCESS;
 }

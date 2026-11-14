@@ -18,6 +18,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #include "mocap4r2_control/frame_publisher.hpp"
@@ -42,6 +43,8 @@ protected:
   CallbackReturn on_system_deactivate() override;
   CallbackReturn on_system_cleanup() override;
   void on_system_shutdown() override;
+  std::string server() const override {return server_label_;}
+  bool connected() const override {return client_ != nullptr;}
 
 private:
   void on_frame(natnet::FrameData && frame);
@@ -53,6 +56,7 @@ private:
   natnet::ServerInfo server_;
   ConverterOptions options_;
   bool compensate_latency_{true};
+  std::string server_label_;
 
   std::mutex model_mutex_;
   Model model_;
