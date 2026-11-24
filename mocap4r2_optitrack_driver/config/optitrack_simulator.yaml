@@ -1,0 +1,11 @@
+# OptiTrack driver against natnet_simulator on this computer (no Motive needed):
+#   ros2 run mocap4r2_optitrack_driver natnet_simulator
+#   ros2 launch mocap4r2_optitrack_driver optitrack_driver.launch.yaml \
+#     params_file:=$(ros2 pkg prefix mocap4r2_optitrack_driver)/share/mocap4r2_optitrack_driver/config/optitrack_simulator.yaml
+optitrack_driver:
+  ros__parameters:
+    server_address: "127.0.0.1"
+    local_address: "127.0.0.1"
+    connection_type: "unicast"
+    up_axis: "y"
+    publish_tf: true
