@@ -1,0 +1,48 @@
+name: natnet_sdk
+
+on:
+  push:
+    branches: [rolling]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Same tests with the official NatNet SDK backend (sdk and open must agree).
+  build-sdk:
+    name: ${{ matrix.distro }} + NatNet SDK
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [jazzy, rolling]
+    container:
+      image: ros:${{ matrix.distro }}-ros-base
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src/${{ github.event.repository.name }}
+      - name: Dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3-vcstool python3-colcon-common-extensions curl
+          vcs import src < src/${{ github.event.repository.name }}/dependency_repos.repos
+          rosdep update --rosdistro ${{ matrix.distro }}
+          rosdep install -y -i -r --from-paths src --rosdistro ${{ matrix.distro }}
+      - name: NatNet SDK
+        run: |
+          src/${{ github.event.repository.name }}/mocap4r2_optitrack_driver/scripts/install_natnet_sdk.sh \
+            --accept-eula --dir /opt/natnet_sdk
+      - name: Build
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          export NATNET_SDK_DIR=/opt/natnet_sdk
+          colcon build --event-handlers console_cohesion+ --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          grep -q "NatNet SDK found" log/latest_build/mocap4r2_optitrack_driver/stdout.log
+      - name: Test
+        run: |
+          source /opt/ros/${{ matrix.distro }}/setup.bash
+          colcon test --parallel-workers 1 --packages-select mocap4r2_optitrack_driver --event-handlers console_cohesion+
+          colcon test-result --verbose

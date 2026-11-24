@@ -1,115 +1,107 @@
-cmake_minimum_required(VERSION 3.5)
-
+cmake_minimum_required(VERSION 3.10)
 project(mocap4r2_optitrack_driver)
 
-# Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
-
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(LIBNATNET_SDK_LIBRARY ${CMAKE_CURRENT_SOURCE_DIR}/NatNetSDK/lib/libNatNet.so)
-set(NATNET_INCLUDE_DIR
-  ${CMAKE_CURRENT_SOURCE_DIR}/NatNetSDK/include
-)
-
 find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(rclcpp_lifecycle REQUIRED)
-find_package(tf2 REQUIRED)
-find_package(tf2_ros REQUIRED)
-find_package(mocap4r2_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
-find_package(mocap4r2_control_msgs REQUIRED)
 find_package(mocap4r2_control REQUIRED)
+find_package(mocap4r2_interfaces REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
 
-set(dependencies
-  rclcpp
-  rclcpp_lifecycle
-  tf2
-  tf2_ros
-  mocap4r2_msgs
-  mocap4r2_control
-  mocap4r2_control_msgs
+# NatNet protocol, client and fake server: no ROS, no proprietary SDK.
+add_library(natnet_protocol SHARED
+  src/natnet_protocol.cpp
+  src/natnet_client.cpp
+  src/fake_natnet_server.cpp
 )
-
-include_directories(
-  include
-  ${NATNET_INCLUDE_DIR}
+set_target_properties(natnet_protocol PROPERTIES OUTPUT_NAME mocap4r2_natnet)
+target_include_directories(natnet_protocol PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
+find_package(Threads REQUIRED)
+target_link_libraries(natnet_protocol PUBLIC Threads::Threads)
 
-add_library(${PROJECT_NAME}
-  src/mocap4r2_optitrack_driver/mocap4r2_optitrack_driver.cpp)
+# Optional official NatNet SDK (not distributed: install it with install_natnet_sdk.sh).
+option(MOCAP4R2_USE_NATNET_SDK "Build the backend on the official NatNet SDK if it is found" ON)
+set(NATNET_SDK_DIR "$ENV{NATNET_SDK_DIR}" CACHE PATH "Directory of the NatNet SDK")
+if(NOT NATNET_SDK_DIR)
+  set(NATNET_SDK_DIR "$ENV{HOME}/.local/share/natnet_sdk")
+endif()
+set(NATNET_SDK_FOUND FALSE)
+if(MOCAP4R2_USE_NATNET_SDK)
+  find_path(NATNET_INCLUDE_DIR NatNetClient.h PATHS "${NATNET_SDK_DIR}/include" NO_DEFAULT_PATH)
+  find_library(NATNET_LIBRARY NatNet PATHS "${NATNET_SDK_DIR}/lib" NO_DEFAULT_PATH)
+  if(NATNET_INCLUDE_DIR AND NATNET_LIBRARY)
+    set(NATNET_SDK_FOUND TRUE)
+  endif()
+endif()
 
-ament_target_dependencies(${PROJECT_NAME} ${dependencies})
-target_compile_definitions(${PROJECT_NAME}
-  PRIVATE "OPTITRACK_BUILDING_LIBRARY")
+set(driver_sources src/frame_converter.cpp src/optitrack_driver.cpp src/natnet_backend.cpp)
+if(NATNET_SDK_FOUND)
+  message(STATUS "NatNet SDK found: ${NATNET_LIBRARY} (backends: sdk, open)")
+  list(APPEND driver_sources src/natnet_sdk_backend.cpp)
+else()
+  message(STATUS "NatNet SDK not found in ${NATNET_SDK_DIR} (backend: open)")
+endif()
 
-add_executable(mocap4r2_optitrack_driver_main
-  src/mocap4r2_optitrack_driver_main.cpp
+add_library(${PROJECT_NAME} SHARED ${driver_sources})
+if(NATNET_SDK_FOUND)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE MOCAP4R2_HAVE_NATNET_SDK)
+  target_include_directories(${PROJECT_NAME} PRIVATE "${NATNET_INCLUDE_DIR}")
+  target_link_libraries(${PROJECT_NAME} PRIVATE "${NATNET_LIBRARY}")
+  get_filename_component(NATNET_LIB_DIR "${NATNET_LIBRARY}" DIRECTORY)
+  set_target_properties(${PROJECT_NAME} PROPERTIES INSTALL_RPATH "${NATNET_LIB_DIR}")
+endif()
+target_link_libraries(${PROJECT_NAME} PUBLIC
+  natnet_protocol
+  mocap4r2_control::mocap4r2_control
+  ${mocap4r2_interfaces_TARGETS}
+  rclcpp::rclcpp
 )
-ament_target_dependencies(mocap4r2_optitrack_driver_main ${dependencies})
-target_link_libraries(mocap4r2_optitrack_driver_main
-  ${PROJECT_NAME}
-  ${LIBNATNET_SDK_LIBRARY}
-)
+target_link_libraries(${PROJECT_NAME} PRIVATE rclcpp_components::component)
+rclcpp_components_register_nodes(${PROJECT_NAME} "mocap4r2_optitrack_driver::OptitrackDriver")
 
-ament_target_dependencies(mocap4r2_optitrack_driver ${dependencies})
-target_link_libraries(mocap4r2_optitrack_driver ${LIBNATNET_SDK_LIBRARY})
+add_executable(optitrack_driver src/optitrack_driver_main.cpp)
+target_link_libraries(optitrack_driver ${PROJECT_NAME})
 
-install(DIRECTORY include/${PROJECT_NAME}
-  DESTINATION include/
-)
+add_executable(natnet_simulator src/natnet_simulator.cpp)
+target_link_libraries(natnet_simulator natnet_protocol)
 
-install(DIRECTORY
-  launch
-  config
-  DESTINATION share/${PROJECT_NAME}
-)
-
-install(TARGETS
-  mocap4r2_optitrack_driver_main
-  RUNTIME DESTINATION lib/${PROJECT_NAME}
-)
-
-install(TARGETS
-  ${PROJECT_NAME}
+install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/install_natnet_sdk.sh DESTINATION lib/${PROJECT_NAME})
+install(TARGETS natnet_protocol ${PROJECT_NAME}
+  EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
-
+install(TARGETS optitrack_driver natnet_simulator RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
-  find_package(ament_cmake_copyright REQUIRED)
-  find_package(ament_cmake_cppcheck REQUIRED)
-  find_package(ament_cmake_cpplint REQUIRED)
-  find_package(ament_cmake_lint_cmake REQUIRED)
-  find_package(ament_cmake_xmllint REQUIRED)
-  find_package(ament_cmake_uncrustify REQUIRED)
-
-
-  file(GLOB_RECURSE EXCLUDE_FILES NatNetSDK/*)
-
-  ament_copyright(EXCLUDE ${EXCLUDE_FILES})
-  ament_cppcheck(
-    EXCLUDE ${EXCLUDE_FILES}
-    LANGUAGE c++
-  )
-  ament_cpplint(EXCLUDE ${EXCLUDE_FILES})
-  ament_lint_cmake()
-  ament_uncrustify(
-    EXCLUDE ${EXCLUDE_FILES}
-    LANGUAGE c++
-  )
+  find_package(ament_lint_auto REQUIRED)
+  if("$ENV{ROS_DISTRO}" STREQUAL "humble")
+    # uncrustify 0.72 of Humble formats differently: style is checked on newer distros
+    set(ament_cmake_uncrustify_FOUND TRUE)
+  endif()
+  ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_natnet_protocol test/test_natnet_protocol.cpp)
+  target_link_libraries(test_natnet_protocol natnet_protocol)
+  ament_add_gtest(test_frame_converter test/test_frame_converter.cpp)
+  target_link_libraries(test_frame_converter ${PROJECT_NAME})
+  ament_add_gtest(test_optitrack_driver test/test_optitrack_driver.cpp TIMEOUT 180)
+  target_link_libraries(test_optitrack_driver ${PROJECT_NAME})
 endif()
 
-ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME})
-ament_export_dependencies(${dependencies})
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(mocap4r2_control mocap4r2_interfaces rclcpp)
 ament_package()
